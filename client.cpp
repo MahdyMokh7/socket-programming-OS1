@@ -162,7 +162,7 @@ int main(int argc, char* argv[]) {
     char* ip = argv[1];
     int port = atoi(argv[2]);
 
-    int fd_server_tcp, fd_server_udp, fd_room_tcp, fd_room_udp;
+    int fd_server_tcp, fd_server_udp, fd_room_tcp;
     char buffer[MAX_BUFFER_SIZE] = {0};
     char buffer_name[MAX_BUFFER_SIZE] = {0};
     ssize_t bytes_received;
@@ -192,7 +192,7 @@ int main(int argc, char* argv[]) {
 
         for(int i = 0; i < pfds.size(); i++) {
             if(pfds[i].revents & POLLIN) {
-                write(1, "salam\n", strlen("salam\n"));
+
                 if(pfds[i].fd == fd_server_tcp) {
                     switch (state) {
                     case START:
@@ -272,7 +272,6 @@ int main(int argc, char* argv[]) {
                             pfds.pop_back();
                             pfds.pop_back();
                             close(fd_room_tcp);
-                            close(fd_room_udp);
                             state = GET_LIST_EMPTY_ROOMS;
                         }
 
@@ -353,7 +352,6 @@ int main(int argc, char* argv[]) {
                         write(1, buffer, bytes_received); 
 
                         close(fd_room_tcp);
-                        close(fd_room_udp);
                         close(fd_server_tcp);
                         close(fd_server_udp);
                     }
@@ -365,17 +363,6 @@ int main(int argc, char* argv[]) {
                         write(1, "\n", 1);
 
                         close(fd_room_tcp);
-                        close(fd_room_udp);
-
-                        if (buffer == WON) {
-                            wons ++;
-                        }
-                        else if(buffer == LOST) { 
-                            losts ++;
-                        }
-                        else { 
-                            write(2, "something is wrong in the define part of win/lost status\n", strlen("something is wrong in the define part of win/lost status\n"));
-                        }
 
                         state = GET_LIST_EMPTY_ROOMS;
                     }

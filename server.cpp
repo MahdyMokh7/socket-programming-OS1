@@ -41,6 +41,8 @@
 #define ROOM_CHECK 3
 #define IN_ROOM 4
 
+#define PORT_UDP 8080
+
 using namespace std;
 
 int setupServer_tcp(int port, char* ip, string mode);
@@ -123,8 +125,10 @@ public:
 };
 
 void endEntireGameMessage(int fd_server_udp, const std::vector<Client>& client_objs, const char* buffer);
-void sendBroadcastMessage(int fd_udp, char* message, int port);
+void sendBroadcastMessage(int fd_udp, char* message);
 Client* getClientByFdRoom(int fd, std::vector<Client>& client_objs);
+vector<SubServer*> findEmptySubServers(const vector<unique_ptr<SubServer>>& subServers);
+char* getAvailablePortsString(const std::vector<SubServer*>& emptySubServers);
 
 int SubServer::instanceCount = 0;
 
@@ -256,15 +260,15 @@ void SubServer::send_end_match_msg(int fd_won, vector<Client>& client_objs) {
         Client* player1 = getClientByFdRoom(fd_players[0], client_objs);
         Client* player2 = getClientByFdRoom(fd_players[1], client_objs);
         
-            if (fd_won == -1) {
-                // No winner (draw scenario)
-                message = "The game in room " + to_string(port_tcp) + " has concluded in an epic draw!\n";
-                message += "Both players showed exceptional skill, making it a match to remember.\n";
-                message += "Congratulations to " + player1->get_name() + " and " + player2->get_name() + " for a fantastic game!";
+        if (fd_won == -1) {
+            // No winner (draw scenario)
+            message = "The game in room " + to_string(port_tcp) + " has concluded in an epic draw!\n";
+            message += "Both players showed exceptional skill, making it a match to remember.\n";
+            message += "Congratulations to " + player1->get_name() + " and " + player2->get_name() + " for a fantastic game!";
 
-                player1->increment_ties();
-                player2->increment_ties();
-            }
+            player1->increment_ties();
+            player2->increment_ties();
+        }
 
         else if (fd_won == fd_players[0]) {
             // Player 1 won
@@ -283,14 +287,11 @@ void SubServer::send_end_match_msg(int fd_won, vector<Client>& client_objs) {
             player1->increment_loses();
         } 
         else {
-            // Invalid fd_won value
             write(2, "something went terribly wrong\n", strlen("something went terribly wrong\n"));
             return;
         }
 
-        // Convert message to C-string and send it using the UDP broadcast
-        write(1, message.c_str(), strlen(message.c_str()));////////////////////////////////////
-        sendBroadcastMessage(this->fd_udp, const_cast<char*>(message.c_str()), port_tcp);
+        sendBroadcastMessage(this->fd_udp, const_cast<char*>(message.c_str()));
     } 
     catch (const std::runtime_error& e) {
         write(2, "Error retrieving client: ", strlen("Error retrieving client: "));
@@ -300,28 +301,18 @@ void SubServer::send_end_match_msg(int fd_won, vector<Client>& client_objs) {
 }
 
 
-void sendBroadcastMessage(int fd_udp, char* message, int port) {
+void sendBroadcastMessage(int fd_udp, char* message) {
     struct sockaddr_in broadcast_addr;
     memset(&broadcast_addr, 0, sizeof(broadcast_addr));
 
     broadcast_addr.sin_family = AF_INET;
-    broadcast_addr.sin_port = htons(port);
+    broadcast_addr.sin_port = htons(PORT_UDP);
     broadcast_addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);  // Set to broadcast address
-
-    // Set socket options to allow broadcasting
-    int broadcastEnable = 1;
-    if (setsockopt(fd_udp, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable)) < 0) {
-        perror("setsockopt failed");
-        return;
-    }
 
     // Send the broadcast message
     ssize_t bytes_sent = sendto(fd_udp, message, strlen(message), 0,
                                 (struct sockaddr*)&broadcast_addr, sizeof(broadcast_addr));
-            char bytes_str[20];
-        int len = snprintf(bytes_str, sizeof(bytes_str), "%zd\n", bytes_sent);
-        write(1, bytes_str, len);
-    write(1, "\nheyimBored\n", strlen("heyimBored\n"));
+
     // Prepare the feedback message
     char feedback_msg[256];
     if (bytes_sent < 0) {
@@ -330,9 +321,12 @@ void sendBroadcastMessage(int fd_udp, char* message, int port) {
         snprintf(feedback_msg, sizeof(feedback_msg), "Broadcast message sent: %s\n", message);
     }
 
-    // // Optionally, you can send feedback message back
-    // sendto(fd_udp, feedback_msg, strlen(feedback_msg), 0,
-    //        (struct sockaddr*)&broadcast_addr, sizeof(broadcast_addr));
+}
+
+void sendListPortsToGivenFD(int fd, vector<unique_ptr<SubServer>>& subServers) {
+    // send the ports available to the client
+    char* msg = getAvailablePortsString(findEmptySubServers(subServers));
+    send(fd, msg, strlen(msg), 0);
 }
 
 void endEntireGameMessage(int fd_server_udp, vector<Client>& client_objs, char* buffer) {
@@ -671,14 +665,14 @@ int main(int argc, char* argv[]) {
 
                 else if(pfds[i].fd == fd_server_udp) {
                     // receive redundunt msg
-                    write(1, "we have come to this part that the udp is reiceved by myself\n", strlen("we have come to this part that the udp is reiceved by myself\n"));
+                    
                     bytes_received = recvfrom(fd_server_udp, buffer, sizeof(buffer) - 1, 0,
                                             (struct sockaddr *)&server_address, &server_address_len);
                     if(bytes_received > 0) {
                         buffer[bytes_received] = '\0';  
                     } 
                     write(1, buffer, strlen(buffer));
-                    memset(buffer, 0, sizeof(buffer));
+                    memset(buffer, 0, sizeof(buffer)); 
                 }
 
                 else if(client_server_fds.find(pfds[i].fd) != client_server_fds.end()) {  // recieve the name of client and send client the list of rooms
@@ -772,12 +766,18 @@ int main(int argc, char* argv[]) {
 
                     // when both the players made their action
                     if(subServer_obj->did_all_players_make_action()) {
-                        write(1, "doneYO\n", strlen("doneYO\n"));
+                        // write(1, "doneYO\n", strlen("doneYO\n"));
                         int result = subServer_obj->check_match_result();
                         
                         subServer_obj->send_end_match_msg(result, client_objs);///////////////////////////////
 
+                        int fd_tcp_1 = subServer_obj->get_fds()[0];
+                        int fd_tcp_2 = subServer_obj->get_fds()[1];
+
                         subServer_obj->clear_room();
+
+                        sendListPortsToGivenFD(fd_tcp_1, subServers);
+                        sendListPortsToGivenFD(fd_tcp_2, subServers);
                     }
                 }
 
